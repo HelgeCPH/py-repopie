@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "repopie"
+version = "0.1.0"
+description = ""
+authors = ["HelgeCPH <ropf@itu.dk>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pandas = "^2.3.2"
+iso-week-date = "^2.1.0"
+bokeh = "3.6"
+circlify = "^0.15.1"
+packcircles = "^0.14"
+
+
+[tool.poetry.group.dev.dependencies]
+ipython = "8.5"
+bokeh-sampledata = "^2025.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+repopie = "repopie.cmd:main"
