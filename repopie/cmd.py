@@ -1,17 +1,21 @@
-from bokeh.models import ColumnDataSource, HoverTool, BoxAnnotation
-from bokeh.plotting import figure, show
-from bokeh.transform import factor_cmap, factor_hatch, cumsum
-from bokeh.core.enums import HatchPattern
-import pandas as pd
-import numpy as np
-from iso_week_date.pandas_utils import datetime_to_isoweek, isoweek_to_datetime
-from dateutil import rrule
+import sys
 
+import numpy as np
+import pandas as pd
+from bokeh.core.enums import HatchPattern
+from bokeh.models import BoxAnnotation, ColumnDataSource, HoverTool
+from bokeh.plotting import figure, show
+from bokeh.transform import cumsum, factor_cmap, factor_hatch
+from dateutil import rrule
+from iso_week_date.pandas_utils import datetime_to_isoweek, isoweek_to_datetime
+from packcircles import pack
 
 
 def read_data():
-    # TODO: switch to reading from stdin
-    df = pd.read_csv("data/example_data.csv", names=["timestamp", "yAxis", "nodeSize", "pieGroupId", "sliceGroupId"])
+    df = pd.read_csv(
+        sys.stdin,
+        names=["timestamp", "yAxis", "nodeSize", "pieGroupId", "sliceGroupId"],
+    )
     return df
 
 
@@ -23,23 +27,27 @@ def _compute_timestamp_fields(df):
 
     # TODO: Make this dependent on CLI option
     # Choose weekday 4 (Thursday) to get a center coordinate for the week/pie chart
-    df.timestamp = isoweek_to_datetime(series=df.timestamp_isoweek, weekday=4) + pd.to_timedelta(12, unit="h")
+    df.timestamp = isoweek_to_datetime(
+        series=df.timestamp_isoweek, weekday=4
+    ) + pd.to_timedelta(12, unit="h")
 
     return df
 
 
 def _compute_week_bands(df):
     time_span = pd.Series(
-                    rrule.rrule(
-                        rrule.WEEKLY,
-                        dtstart=df.timestamp.min(),
-                        until=df.timestamp.max() + pd.to_timedelta(1, unit="w")
-                    )
-                )
+        rrule.rrule(
+            rrule.WEEKLY,
+            dtstart=df.timestamp.min(),
+            until=df.timestamp.max() + pd.to_timedelta(1, unit="w"),
+        )
+    )
     iso_weeks_span = datetime_to_isoweek(series=time_span)
     week_band_dates = zip(
         isoweek_to_datetime(series=iso_weeks_span, weekday=1),
-        isoweek_to_datetime(series=iso_weeks_span, weekday=7)  # + pd.to_timedelta(1, unit="d")
+        isoweek_to_datetime(
+            series=iso_weeks_span, weekday=7
+        ),  # + pd.to_timedelta(1, unit="d")
     )
     week_band_dates = list(week_band_dates)[::2]
     return week_band_dates
@@ -54,26 +62,44 @@ def _compute_piechart_radii(week_band_dates):
 
     min_radius = pd.to_timedelta(36, unit="h").to_timedelta64().astype(int)
 
+    # Circle area: A = πr**2
+    # -> r = np.sqrt(A/np.pi)
+
     return min_radius, max_radius
 
 
 def _collect_scatterplot_data(df, min_radius, max_radius):
-    df_scatter = df.groupby(["timestamp", "pieGroupId"])[["yAxis","nodeSize"]].sum().reset_index()
+    df_scatter = (
+        df.groupby(["timestamp", "pieGroupId"])[["yAxis", "nodeSize"]]
+        .sum()
+        .reset_index()
+    )
 
     df_scatter["nodeRadius"] = np.interp(
         df_scatter.nodeSize,
         [df_scatter.nodeSize.min(), df_scatter.nodeSize.max()],
-        [min_radius, max_radius]
+        [min_radius, max_radius],
     ).astype(int)
     df_scatter["nodeRadius"] = pd.to_timedelta(df_scatter["nodeRadius"], unit="ns")
-    # df_scatter["nodeRadius"] = df_scatter["nodeRadius"] // 10 **6
     return df_scatter
 
 
 def _collect_piechart_data(df, df_scatter):
-    df_pie_charts = df.groupby(["timestamp", "pieGroupId", "sliceGroupId"])[["yAxis","nodeSize"]].sum().reset_index()
-    df_pie_charts = pd.merge(df_pie_charts, df_scatter, how="left", on=["timestamp", "pieGroupId"], suffixes=("_share", ""))
-    df_pie_charts["angle"] = df_pie_charts["nodeSize_share"] / df_pie_charts["nodeSize"] * (2 * np.pi)
+    df_pie_charts = (
+        df.groupby(["timestamp", "pieGroupId", "sliceGroupId"])[["yAxis", "nodeSize"]]
+        .sum()
+        .reset_index()
+    )
+    df_pie_charts = pd.merge(
+        df_pie_charts,
+        df_scatter,
+        how="left",
+        on=["timestamp", "pieGroupId"],
+        suffixes=("_share", ""),
+    )
+    df_pie_charts["angle"] = (
+        df_pie_charts["nodeSize_share"] / df_pie_charts["nodeSize"] * (2 * np.pi)
+    )
 
     starts = []
     ends = []
@@ -87,55 +113,118 @@ def _collect_piechart_data(df, df_scatter):
     return df_pie_charts
 
 
-def _collect_group_box_data(df, df_scatter):
-    df_boxes = df.groupby(["timestamp", "pieGroupId"])[["yAxis","nodeSize"]].sum().reset_index()
-    # TODO: continue here!
+def _collect_group_box_data(df_scatter):
+    df_scatter_count = df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
+    df_boxes = df_scatter_count[df_scatter_count.amount > 1][["timestamp", "yAxis"]]
+    return df_boxes
+
+
+def _compute_group_bounding_box(df_boxes):
+    # Set timestamp to the beginning of the week, i.e., Monday 00:00:00
+    # `ts.weekday()` returns 0 for Monday, 1 for Tuesday, etc.
+    # Consequently, subtracting that many days sets lower bound of bounding box to Monday.
+    df_boxes.timestamp = df_boxes.timestamp - pd.to_timedelta(df_boxes.timestamp.dt.weekday, unit="d") - pd.to_timedelta(12, unit="h")
+    df_boxes.yAxis = df_boxes.yAxis - 0.5
+    df_boxes["height"] = 1
+    df_boxes["width"] = pd.to_timedelta(1, unit="w")
+    return df_boxes
+
+
+def _compute_nonoverlapping_coordinates_per_box(df_scatter, timestamp, yAxis):
+    # Convert the radii to integers in seconds, since the packcircles implementation cannot handle very large integers
+    # in nanoseconds
+    row_indexer = ((df_scatter.timestamp == timestamp) & (df_scatter.yAxis == yAxis))
+    radii_in_seconds = pd.to_timedelta(df_scatter[row_indexer].nodeRadius).astype(int) // 10 ** 9
+    if df_scatter[row_indexer].nodeRadius.size < 3:
+        # the algorithm in the packcircles package needs at least three circles to pack them. In this case, to satisfy
+        # the algorithm, I add a tiny dummy circle, which will be removed later.
+        radii_in_seconds = pd.concat([radii_in_seconds, pd.Series(1)], ignore_index=True)
+    # Call the actual circle packing algorithm
+    circles = pack(radii_in_seconds.values)
+    if df_scatter[row_indexer].nodeRadius.size < 3:
+        # Remove the dummy circle again
+        circles = list(circles)[:-1]
+    packed_circle_coords_df = pd.DataFrame(circles, columns=["Δx", "Δy", "nodeRadius"])
+    # Convert the newly computed centers of packed circles back to time deltas and small values for y-coordinates so
+    # so that the can be placed in the original coordinate system.
+    packed_circle_coords_df.Δx = pd.to_timedelta(packed_circle_coords_df.Δx, unit="s")
+    packed_circle_coords_df.Δy = (packed_circle_coords_df.Δy // 10 ** 6) / 2
+    # Apply the newly computed coordinates to the scatter plot dataframe.
+    df_scatter.loc[row_indexer, "x"] = df_scatter.loc[row_indexer, "x"] + packed_circle_coords_df.Δx.values
+    df_scatter.loc[row_indexer, "y"] = df_scatter.loc[row_indexer, "y"] + packed_circle_coords_df.Δy.values
+    return df_scatter
+
+
+def _compute_nonoverlapping_coordinates(df_scatter):
+    df_scatter["x"] = df_scatter["timestamp"]
+    df_scatter["y"] = df_scatter["yAxis"].astype(float)
+    # The following DataFrame holds the number of circles that would be plotted on the same x-/y-coordinates if only
+    # timestamp (x-coordinate) and yAxis (y-coordinate) are considered.
+    df_scatter_count = df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
+    for ts, y, _ in df_scatter_count[df_scatter_count.amount > 1].itertuples(index=False):
+        _compute_nonoverlapping_coordinates_per_box(df_scatter, ts, y)
+    return df_scatter
 
 
 def preprocess_data(df):
     _compute_timestamp_fields(df)
-    week_band_dates  =_compute_week_bands(df)
+    week_band_dates = _compute_week_bands(df)
 
     min_radius, max_radius = _compute_piechart_radii(week_band_dates)
     df_scatter = _collect_scatterplot_data(df, min_radius, max_radius)
+    # In case multiple circles have to plotted on the same x-/y-coordinates, they should be plotted in box and non-
+    # overlapping. For example, the following two files were edited on the same date (x-axis, May 15th) and each have
+    # one commit, the metric that is put on the y-axis.
+    #           timestamp           pieGroupId  yAxis  nodeSize                nodeRadius
+    # 2025-05-15 12:00:00   repoFilter/main.go      1         2 1 days 12:04:28.879668049
+    # 2025-05-15 12:00:00   repoGitLog/main.go      1         2 1 days 12:04:28.879668049
+    # To plot these in a non-overlapping way, one has to compute center points for the scatter plot circles that are
+    # both floating point numbers in the range of the bounding box
+    df_scatter = _compute_nonoverlapping_coordinates(df_scatter)
+
     df_pie_charts = _collect_piechart_data(df, df_scatter)
+    df_boxes = _compute_group_bounding_box(_collect_group_box_data(df_scatter))
 
-    return week_band_dates, df_scatter, df_pie_charts
+    return week_band_dates, df_scatter, df_pie_charts, df_boxes
 
 
-def create_plot(week_band_dates, df_scatter, df_pie_charts, title="Default"):
+def create_plot(week_band_dates, df_scatter, df_pie_charts, df_boxes, title="Default"):
 
     color_map = factor_cmap(
-        "pieGroupId", palette="Category20_20",  # "Colorblind8"
-        factors=df_scatter.pieGroupId.unique()
+        "pieGroupId",
+        palette="Category20_20",  # "Colorblind8"
+        factors=df_scatter.pieGroupId.unique(),
     )
     hatch_pattern_map = factor_hatch(
         "sliceGroupId",
-        patterns=['dot',
- 'ring',
- 'vertical_line',
- 'cross',
- 'horizontal_dash',
- 'vertical_dash',
- 'spiral',
- 'right_diagonal_line',
- 'left_diagonal_line',
- 'diagonal_cross',
- 'right_diagonal_dash',
- 'left_diagonal_dash',
- 'horizontal_wave',
- 'vertical_wave',
- 'criss_cross'],
-        factors=df_pie_charts.sliceGroupId.unique()
+        patterns=[
+            "dot",
+            "ring",
+            "vertical_line",
+            "cross",
+            "horizontal_dash",
+            "vertical_dash",
+            "spiral",
+            "right_diagonal_line",
+            "left_diagonal_line",
+            "diagonal_cross",
+            "right_diagonal_dash",
+            "left_diagonal_dash",
+            "horizontal_wave",
+            "vertical_wave",
+            "criss_cross",
+        ],
+        factors=df_pie_charts.sliceGroupId.unique(),
     )
 
     p = figure(
-        width=1900, height=800,
+        width=1900,
+        height=800,
         title=title,
         toolbar_location=None,
         # y_axis_type="log",
         x_axis_type="datetime",
-        y_range=(0, df_pie_charts.yAxis.max() + 2)
+        y_range=(0.0, df_pie_charts.yAxis.max() + 2.0),
     )
 
     # Create gray background bands
@@ -144,75 +233,32 @@ def create_plot(week_band_dates, df_scatter, df_pie_charts, title="Default"):
             fill_color="#bbbbbb",
             fill_alpha=0.1,
             left=week_start,
-            right=week_end+pd.to_timedelta(1, unit="d"),
+            right=week_end + pd.to_timedelta(1, unit="d"),
             # https://github.com/bokeh/bokeh/issues/13980#issuecomment-2226960920
-            propagate_hover=True
+            propagate_hover=True,
         )
         for week_start, week_end in week_band_dates
     ]
     p.renderers.extend(boxes)
 
-    source = ColumnDataSource(data=df_scatter)
-    # for pieGroupId in df_scatter.pieGroupId.unique():
-    #     # This loop is necessary to set the legend labels for the interactive
-    #     # legend. It cannot be done shorter with argument `legend_group="pieGroupId"`, see
-    #     # https://docs.bokeh.org/en/latest/docs/user_guide/basic/annotations.html#interactive-legends
-    #     small_source = ColumnDataSource(data=df_scatter[df_scatter.pieGroupId == pieGroupId])
-    #     p.scatter("timestamp", "yAxis", size="nodeRadius", fill_color=None,
-    #                 line_width=4, line_color=cmap, legend_label=pieGroupId,
-                    # source=small_source)
-
-    # for pieGroupId in df_scatter.pieGroupId.unique():
-    #     # This loop is necessary to set the legend labels for the interactive
-    #     # legend. It cannot be done shorter with argument `legend_group="pieGroupId"`, see
-    #     # https://docs.bokeh.org/en/latest/docs/user_guide/basic/annotations.html#interactive-legends
-    #     small_source = ColumnDataSource(data=df_scatter[df_scatter.pieGroupId == pieGroupId])
-    #     p.circle(
-    #         "timestamp",
-    #         "yAxis",
-    #         radius=pd.to_timedelta(2, unit="d"),
-    #         fill_color=None,
-    #         line_width=6,
-    #         line_color=color_map,
-    #         legend_label=pieGroupId,
-    #         source=small_source
-    #     )
-
-# https://codereview.stackexchange.com/questions/202416/plot-random-generated-n-non-colliding-circles-using-matplotlib
-# https://github.com/mhtchan/packcircles
-# https://github.com/xnx/circle-packing
-# https://www.nodebox.net/code/index.php/shared_2008-08-07-12-55-33
-
-
-    # p.block(
-    #     x="",
-    #     y="",
-    #     width="w",
-    #     height="h",
-    #     fill_alpha=1.0,
-    #     fill_color='gray',
-    #     line_color='black',
-    #     line_dash=[],
-    #     line_dash_offset=0,
-    #     line_join='bevel',
-    #     line_width=1,
-    # )
-
+    scatter_data_source = ColumnDataSource(data=df_scatter)
     circles = p.circle(
-        x="timestamp",
-        y="yAxis",
+        x="x",
+        y="y",
         radius="nodeRadius",
         fill_color=None,
         line_width=6,
         line_color=color_map,
         legend_group="pieGroupId",
-        source=source
+        source=scatter_data_source,
     )
 
     pie_data_source = ColumnDataSource(data=df_pie_charts)
     p.annular_wedge(
-        x="timestamp",
-        y="yAxis",
+        # x="timestamp",
+        # y="yAxis",
+        x="x",
+        y="y",
         inner_radius=pd.to_timedelta(18, unit="h"),
         outer_radius="nodeRadius",  # pd.to_timedelta(2, unit="d"), #"nodeSize",
         start_angle="start_angles",
@@ -227,58 +273,57 @@ def create_plot(week_band_dates, df_scatter, df_pie_charts, title="Default"):
         source=pie_data_source,
     )
 
-    p.add_tools(HoverTool(
-        tooltips=[
-            # TODO: Set proper name and style it
-            ("Node", "@pieGroupId"),
-            ("Timestamp", "@timestamp{%F}"),
-            ("Commit", "@yAxis"),
-            ("Churn", "@nodeSize")
-        ],
-        formatters={
-            "@timestamp": "datetime",
-        },
-        # https://discourse.bokeh.org/t/use-hovertool-for-some-glyphs-but-not-others-in-a-plot/10749/2
-        renderers=[circles]
-    ))
+    box_data_source = ColumnDataSource(data=df_boxes)
+    p.block(
+        x="timestamp",
+        y="yAxis",
+        width="width",
+        height="height",
+        # fill_alpha=1.0,
+        fill_color=None,
+        line_color='black',
+        # line_dash=[],
+        # line_dash_offset=0,
+        line_join='bevel',
+        line_width=1,
+        source=box_data_source,
+    )
+
+    p.add_tools(
+        HoverTool(
+            tooltips=[
+                # TODO: Set proper name and style it
+                ("Node", "@pieGroupId"),
+                ("Timestamp", "@timestamp{%F}"),
+                ("Commit", "@yAxis"),
+                ("Churn", "@nodeSize"),
+            ],
+            formatters={
+                "@timestamp": "datetime",
+            },
+            # https://discourse.bokeh.org/t/use-hovertool-for-some-glyphs-but-not-others-in-a-plot/10749/2
+            renderers=[circles],
+        )
+    )
 
     # I would like to have a highlight option, but it does not seem to exist yet
     # https://github.com/bokeh/bokeh/issues/8841
-    p.legend.click_policy="mute"
+    p.legend.click_policy = "mute"
 
     # https://stackoverflow.com/a/62159166
     # https://docs.bokeh.org/en/latest/docs/examples/styling/plots/legend_location_outside.html
-    p.add_layout(p.legend[0], 'right')
+    p.add_layout(p.legend[0], "right")
 
     return p
 
 
-# for row in df.itertuples(index=False):
-#     print("------------")
-#     print(row)
-#     print(row.timestamp, row.pieGroupId)
-#     print(df_scatter[(df_scatter.timestamp == row.timestamp) & (df_scatter.pieGroupId == row.pieGroupId)][["yAxis","nodeSize"]])
-
-# pie_chart_groups = df.groupby(["timestamp", "pieGroupId", "sliceGroupId"])
-# for (timestamp, pieGroupId, _), df_group in pie_chart_groups:
-#     print("------------")
-#     print(df_scatter[(df_scatter.timestamp == timestamp) & (df_scatter.pieGroupId == pieGroupId)][["yAxis","nodeSize"]].sum())
-#     print(df_group.timestamp)
-#     print(df_group.sliceGroupId.unique()[0])
-#     print(df_group[["yAxis","nodeSize"]].sum())
-
-
 def create_repopie_plot(title="Default title"):
     df = read_data()
-    week_band_dates, df_scatter, df_pie_charts = preprocess_data(df)
-
-    df_pie_charts.to_csv("pie_charts.csv", index=False)
-
-    p = create_plot(week_band_dates, df_scatter, df_pie_charts, title=title)
+    week_band_dates, df_scatter, df_pie_charts, df_boxes = preprocess_data(df)
+    p = create_plot(week_band_dates, df_scatter, df_pie_charts, df_boxes,title=title)
     return p
 
 
 def main():
     p = create_repopie_plot()
     show(p)
-
