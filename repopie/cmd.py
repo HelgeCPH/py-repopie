@@ -25,10 +25,10 @@ import sys
 
 import numpy as np
 import pandas as pd
-from bokeh.core.enums import HatchPattern
+from bokeh.io import output_file
 from bokeh.models import BoxAnnotation, ColumnDataSource, HoverTool
 from bokeh.plotting import figure, show
-from bokeh.transform import cumsum, factor_cmap, factor_hatch
+from bokeh.transform import factor_cmap, factor_hatch
 from dateutil import rrule
 from iso_week_date.pandas_utils import datetime_to_isoweek, isoweek_to_datetime
 from packcircles import pack
@@ -395,4 +395,6 @@ def main():
         yAxisLabel=args["--y"],
         rSizeLabel=args["--r"],
     )
+    # Here, I want to save the bokeh plot so that I can embed it in a markdown file and so that its contents are rendered on GitHub.
+    output_file("data/example_output/example.html")
     show(p)
