@@ -12,6 +12,7 @@ iso-week-date = "^2.1.0"
 bokeh = "3.6"
 circlify = "^0.15.1"
 packcircles = "^0.14"
+docopt = "^0.6.2"
 
 
 [tool.poetry.group.dev.dependencies]

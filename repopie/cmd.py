@@ -1,3 +1,26 @@
+"""
+RepoPie 🥧, a tool to visualize numerical and categorical data over time.
+
+Usage:
+repopie [--y=<yname>] [--r=<rname>] [--title=<title>] [--nodecategory=<cat1label>] [--slicecategory=<cat2label>]
+repopie -h | --help
+repopie --version
+
+Options:
+-h --help                    Show this screen.
+--version                    Show version.
+--y=<ylabel>                 Label for numerical data on y-axis [default: yValues].
+--r=<rlabel>                 Label for numerical data used as pie radii [default: rValues].
+--title=<title>              Title of the graph [default: Graph].
+--nodecategory=<cat1label>   Label for categorical data plotted as nodes in scatter plot [default: Nodes]
+--slicecategory=<cat2label>  Label for categorical data plotted as slices in pie chart nodes [default: Slices]
+
+Examples:
+
+$ cat data/example_data.csv | \
+  repopie --y=Commits --r=Churn --title=$(pwd) --nodecategory=File --slicecategory=Authors
+"""
+
 import sys
 
 import numpy as np
@@ -9,6 +32,7 @@ from bokeh.transform import cumsum, factor_cmap, factor_hatch
 from dateutil import rrule
 from iso_week_date.pandas_utils import datetime_to_isoweek, isoweek_to_datetime
 from packcircles import pack
+from docopt import docopt
 
 
 def read_data():
@@ -114,7 +138,9 @@ def _collect_piechart_data(df, df_scatter):
 
 
 def _collect_group_box_data(df_scatter):
-    df_scatter_count = df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
+    df_scatter_count = (
+        df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
+    )
     df_boxes = df_scatter_count[df_scatter_count.amount > 1][["timestamp", "yAxis"]]
     return df_boxes
 
@@ -123,7 +149,11 @@ def _compute_group_bounding_box(df_boxes):
     # Set timestamp to the beginning of the week, i.e., Monday 00:00:00
     # `ts.weekday()` returns 0 for Monday, 1 for Tuesday, etc.
     # Consequently, subtracting that many days sets lower bound of bounding box to Monday.
-    df_boxes.timestamp = df_boxes.timestamp - pd.to_timedelta(df_boxes.timestamp.dt.weekday, unit="d") - pd.to_timedelta(12, unit="h")
+    df_boxes.timestamp = (
+        df_boxes.timestamp
+        - pd.to_timedelta(df_boxes.timestamp.dt.weekday, unit="d")
+        - pd.to_timedelta(12, unit="h")
+    )
     df_boxes.yAxis = df_boxes.yAxis - 0.5
     df_boxes["height"] = 1
     df_boxes["width"] = pd.to_timedelta(1, unit="w")
@@ -133,12 +163,16 @@ def _compute_group_bounding_box(df_boxes):
 def _compute_nonoverlapping_coordinates_per_box(df_scatter, timestamp, yAxis):
     # Convert the radii to integers in seconds, since the packcircles implementation cannot handle very large integers
     # in nanoseconds
-    row_indexer = ((df_scatter.timestamp == timestamp) & (df_scatter.yAxis == yAxis))
-    radii_in_seconds = pd.to_timedelta(df_scatter[row_indexer].nodeRadius).astype(int) // 10 ** 9
+    row_indexer = (df_scatter.timestamp == timestamp) & (df_scatter.yAxis == yAxis)
+    radii_in_seconds = (
+        pd.to_timedelta(df_scatter[row_indexer].nodeRadius).astype(int) // 10**9
+    )
     if df_scatter[row_indexer].nodeRadius.size < 3:
         # the algorithm in the packcircles package needs at least three circles to pack them. In this case, to satisfy
         # the algorithm, I add a tiny dummy circle, which will be removed later.
-        radii_in_seconds = pd.concat([radii_in_seconds, pd.Series(1)], ignore_index=True)
+        radii_in_seconds = pd.concat(
+            [radii_in_seconds, pd.Series(1)], ignore_index=True
+        )
     # Call the actual circle packing algorithm
     circles = pack(radii_in_seconds.values)
     if df_scatter[row_indexer].nodeRadius.size < 3:
@@ -146,12 +180,16 @@ def _compute_nonoverlapping_coordinates_per_box(df_scatter, timestamp, yAxis):
         circles = list(circles)[:-1]
     packed_circle_coords_df = pd.DataFrame(circles, columns=["Δx", "Δy", "nodeRadius"])
     # Convert the newly computed centers of packed circles back to time deltas and small values for y-coordinates so
-    # so that the can be placed in the original coordinate system.
+    # that they can be placed in the original coordinate system.
     packed_circle_coords_df.Δx = pd.to_timedelta(packed_circle_coords_df.Δx, unit="s")
-    packed_circle_coords_df.Δy = (packed_circle_coords_df.Δy // 10 ** 6) / 2
+    packed_circle_coords_df.Δy = (packed_circle_coords_df.Δy // 10**6) / 2
     # Apply the newly computed coordinates to the scatter plot dataframe.
-    df_scatter.loc[row_indexer, "x"] = df_scatter.loc[row_indexer, "x"] + packed_circle_coords_df.Δx.values
-    df_scatter.loc[row_indexer, "y"] = df_scatter.loc[row_indexer, "y"] + packed_circle_coords_df.Δy.values
+    df_scatter.loc[row_indexer, "x"] = (
+        df_scatter.loc[row_indexer, "x"] + packed_circle_coords_df.Δx.values
+    )
+    df_scatter.loc[row_indexer, "y"] = (
+        df_scatter.loc[row_indexer, "y"] + packed_circle_coords_df.Δy.values
+    )
     return df_scatter
 
 
@@ -160,8 +198,12 @@ def _compute_nonoverlapping_coordinates(df_scatter):
     df_scatter["y"] = df_scatter["yAxis"].astype(float)
     # The following DataFrame holds the number of circles that would be plotted on the same x-/y-coordinates if only
     # timestamp (x-coordinate) and yAxis (y-coordinate) are considered.
-    df_scatter_count = df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
-    for ts, y, _ in df_scatter_count[df_scatter_count.amount > 1].itertuples(index=False):
+    df_scatter_count = (
+        df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
+    )
+    for ts, y, _ in df_scatter_count[df_scatter_count.amount > 1].itertuples(
+        index=False
+    ):
         _compute_nonoverlapping_coordinates_per_box(df_scatter, ts, y)
     return df_scatter
 
@@ -188,7 +230,16 @@ def preprocess_data(df):
     return week_band_dates, df_scatter, df_pie_charts, df_boxes
 
 
-def create_plot(week_band_dates, df_scatter, df_pie_charts, df_boxes, title="Default"):
+def create_plot(
+    week_band_dates,
+    df_scatter,
+    df_pie_charts,
+    df_boxes,
+    title="Default",
+    nodeLabel="Node",
+    yAxisLabel="Y",
+    rSizeLabel="Size",
+):
 
     color_map = factor_cmap(
         "pieGroupId",
@@ -218,7 +269,7 @@ def create_plot(week_band_dates, df_scatter, df_pie_charts, df_boxes, title="Def
     )
 
     p = figure(
-        width=1900,
+        sizing_mode="stretch_width",  # alternatively: "stretch_both",
         height=800,
         title=title,
         toolbar_location=None,
@@ -281,10 +332,10 @@ def create_plot(week_band_dates, df_scatter, df_pie_charts, df_boxes, title="Def
         height="height",
         # fill_alpha=1.0,
         fill_color=None,
-        line_color='black',
+        line_color="black",
         # line_dash=[],
         # line_dash_offset=0,
-        line_join='bevel',
+        line_join="bevel",
         line_width=1,
         source=box_data_source,
     )
@@ -293,10 +344,10 @@ def create_plot(week_band_dates, df_scatter, df_pie_charts, df_boxes, title="Def
         HoverTool(
             tooltips=[
                 # TODO: Set proper name and style it
-                ("Node", "@pieGroupId"),
+                (nodeLabel, "@pieGroupId"),
                 ("Timestamp", "@timestamp{%F}"),
-                ("Commit", "@yAxis"),
-                ("Churn", "@nodeSize"),
+                (yAxisLabel, "@yAxis"),  # e.g., Commit
+                (rSizeLabel, "@nodeSize"),  # e.g., Churn
             ],
             formatters={
                 "@timestamp": "datetime",
@@ -317,13 +368,31 @@ def create_plot(week_band_dates, df_scatter, df_pie_charts, df_boxes, title="Def
     return p
 
 
-def create_repopie_plot(title="Default title"):
+def create_repopie_plot(
+    title="Default title", nodeLabel="Node", yAxisLabel="Y", rSizeLabel="Size"
+):
     df = read_data()
     week_band_dates, df_scatter, df_pie_charts, df_boxes = preprocess_data(df)
-    p = create_plot(week_band_dates, df_scatter, df_pie_charts, df_boxes,title=title)
+    p = create_plot(
+        week_band_dates,
+        df_scatter,
+        df_pie_charts,
+        df_boxes,
+        title=title,
+        nodeLabel=nodeLabel,
+        yAxisLabel=yAxisLabel,
+        rSizeLabel=rSizeLabel,
+    )
     return p
 
 
 def main():
-    p = create_repopie_plot()
+    args = docopt(__doc__)
+    print(args)
+    p = create_repopie_plot(
+        title=args["--title"],
+        nodeLabel=args["--nodecategory"],
+        yAxisLabel=args["--y"],
+        rSizeLabel=args["--r"],
+    )
     show(p)
