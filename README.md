@@ -91,6 +91,8 @@ cat data/example_data2.csv | \
   repopie --y=y --r=size --title=$(pwd) --nodecategory=thing --slicecategory=subthings
 ```
 
+<embed src="data/example_output/example.html" width="100%" height="800px" style="border:none;"></embed>
+
 
 ## Installation
 
