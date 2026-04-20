@@ -94,5 +94,34 @@ cat data/example_data2.csv | \
 <embed src="data/example_output/example.html" width="100%" height="800px" style="border:none;"></embed>
 
 
+### Installation for Development
+
+RepoPie is built and packaged with [Poetry](https://python-poetry.org/).
+Make sure you have Poetry installed, see the [official installation instructions](https://python-poetry.org/docs/#installation).
+
+Clone this repository and install all dependencies:
+
+```bash
+git clone git@github.com:HelgeCPH/py-repopie.git
+cd repopie
+poetry install
+```
+
+To run RepoPie, either call the `repopie` script using `poetry run`:
+
+```bash
+cat data/example_data2.csv | \
+  poetry run repopie --y=y --r=size --title=$(pwd) --nodecategory=thing --slicecategory=subthings
+```
+
+Alternatively, activate the virtual environment and run RepoPie in there:
+
+```bash
+eval $(poetry env activate)
+cat data/example_data2.csv | \
+  repopie --y=y --r=size --title=$(pwd) --nodecategory=thing --slicecategory=subthings
+```
+
 ## Installation
 
+TBD
