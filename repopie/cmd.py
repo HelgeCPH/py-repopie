@@ -159,40 +159,6 @@ def _compute_group_bounding_box(df_boxes):
     df_boxes["width"] = pd.to_timedelta(1, unit="w")
     return df_boxes
 
-
-def _compute_nonoverlapping_coordinates_per_box(df_scatter, timestamp, yAxis):
-    # Convert the radii to integers in seconds, since the packcircles implementation cannot handle very large integers
-    # in nanoseconds
-    row_indexer = (df_scatter.timestamp == timestamp) & (df_scatter.yAxis == yAxis)
-    radii_in_seconds = (
-        pd.to_timedelta(df_scatter[row_indexer].nodeRadius).astype(int) // 10**9
-    )
-    if df_scatter[row_indexer].nodeRadius.size < 3:
-        # the algorithm in the packcircles package needs at least three circles to pack them. In this case, to satisfy
-        # the algorithm, I add a tiny dummy circle, which will be removed later.
-        radii_in_seconds = pd.concat(
-            [radii_in_seconds, pd.Series(1)], ignore_index=True
-        )
-    # Call the actual circle packing algorithm
-    circles = pack(radii_in_seconds.values)
-    if df_scatter[row_indexer].nodeRadius.size < 3:
-        # Remove the dummy circle again
-        circles = list(circles)[:-1]
-    packed_circle_coords_df = pd.DataFrame(circles, columns=["Δx", "Δy", "nodeRadius"])
-    # Convert the newly computed centers of packed circles back to time deltas and small values for y-coordinates so
-    # that they can be placed in the original coordinate system.
-    packed_circle_coords_df.Δx = pd.to_timedelta(packed_circle_coords_df.Δx, unit="s")
-    packed_circle_coords_df.Δy = (packed_circle_coords_df.Δy // 10**6) / 2
-    # Apply the newly computed coordinates to the scatter plot dataframe.
-    df_scatter.loc[row_indexer, "x"] = (
-        df_scatter.loc[row_indexer, "x"] + packed_circle_coords_df.Δx.values
-    )
-    df_scatter.loc[row_indexer, "y"] = (
-        df_scatter.loc[row_indexer, "y"] + packed_circle_coords_df.Δy.values
-    )
-    return df_scatter
-
-
 def _compute_nonoverlapping_coordinates(df_scatter):
     df_scatter["x"] = df_scatter["timestamp"]
     df_scatter["y"] = df_scatter["yAxis"].astype(float)
@@ -201,10 +167,7 @@ def _compute_nonoverlapping_coordinates(df_scatter):
     df_scatter_count = (
         df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
     )
-    for ts, y, _ in df_scatter_count[df_scatter_count.amount > 1].itertuples(
-        index=False
-    ):
-        _compute_nonoverlapping_coordinates_per_box(df_scatter, ts, y)
+
     return df_scatter
 
 
@@ -214,14 +177,7 @@ def preprocess_data(df):
 
     min_radius, max_radius = _compute_piechart_radii(week_band_dates)
     df_scatter = _collect_scatterplot_data(df, min_radius, max_radius)
-    # In case multiple circles have to plotted on the same x-/y-coordinates, they should be plotted in box and non-
-    # overlapping. For example, the following two files were edited on the same date (x-axis, May 15th) and each have
-    # one commit, the metric that is put on the y-axis.
-    #           timestamp           pieGroupId  yAxis  nodeSize                nodeRadius
-    # 2025-05-15 12:00:00   repoFilter/main.go      1         2 1 days 12:04:28.879668049
-    # 2025-05-15 12:00:00   repoGitLog/main.go      1         2 1 days 12:04:28.879668049
-    # To plot these in a non-overlapping way, one has to compute center points for the scatter plot circles that are
-    # both floating point numbers in the range of the bounding box
+    # In case multiple circles have to plotted on the same x-/y-coordinates:
     df_scatter = _compute_nonoverlapping_coordinates(df_scatter)
 
     df_pie_charts = _collect_piechart_data(df, df_scatter)
