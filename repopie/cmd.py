@@ -71,7 +71,7 @@ def read_data():
     return df
 
 
-def preprocess_data(df : pd.DataFrame):
+def preprocess_data(df: pd.DataFrame):
     _compute_timestamp_fields(df)
     week_band_dates = _compute_week_bands(df)
 
@@ -86,7 +86,7 @@ def preprocess_data(df : pd.DataFrame):
     return week_band_dates, df_scatter, df_pie_charts, df_boxes
 
 
-def _compute_timestamp_fields(df : pd.DataFrame):
+def _compute_timestamp_fields(df: pd.DataFrame):
     df.timestamp = pd.to_datetime(df.timestamp)
     df["timestamp_isoweek"] = datetime_to_isoweek(series=df.timestamp)
     df["timestamp_month"] = df.timestamp.dt.strftime("%Y-%m")
@@ -94,14 +94,12 @@ def _compute_timestamp_fields(df : pd.DataFrame):
 
     # TODO: Make this dependent on CLI option
     # Choose weekday 4 (Thursday) to get a center coordinate for the week/pie chart
-    df.timestamp = isoweek_to_datetime(
-        series=df.timestamp_isoweek, weekday=4
-    ) + pd.to_timedelta(12, unit="h")
+    df.timestamp = isoweek_to_datetime(series=df.timestamp_isoweek, weekday=4) + pd.to_timedelta(12, unit="h")
 
     return df
 
 
-def _compute_week_bands(df : pd.DataFrame):
+def _compute_week_bands(df: pd.DataFrame):
     time_span = pd.Series(
         rrule.rrule(
             rrule.WEEKLY,
@@ -112,22 +110,20 @@ def _compute_week_bands(df : pd.DataFrame):
     iso_weeks_span = datetime_to_isoweek(series=time_span)
     week_band_dates = zip(
         isoweek_to_datetime(series=iso_weeks_span, weekday=1),
-        isoweek_to_datetime(
-            series=iso_weeks_span, weekday=7
-        ),  # + pd.to_timedelta(1, unit="d")
+        isoweek_to_datetime(series=iso_weeks_span, weekday=7),  # + pd.to_timedelta(1, unit="d")
     )
     week_band_dates = list(week_band_dates)[::2]
     return week_band_dates
 
 
-def _compute_piechart_radii(week_band_dates : list[tuple[pd.Timestamp, pd.Timestamp]]):
+def _compute_piechart_radii(week_band_dates: list[tuple[pd.Timestamp, pd.Timestamp]]):
     week_start_dt, week_end_dt = week_band_dates[0]
-    week_start_dt_ns : int = week_start_dt.to_datetime64().astype(int)
-    week_end_dt_ns : int = week_end_dt.to_datetime64().astype(int)
+    week_start_dt_ns: int = week_start_dt.to_datetime64().astype(int)
+    week_end_dt_ns: int = week_end_dt.to_datetime64().astype(int)
     week_len_in_ns = week_end_dt_ns - week_start_dt_ns
     max_radius = week_len_in_ns // 2
 
-    min_radius : int = pd.to_timedelta(36, unit="h").to_timedelta64().astype(int)
+    min_radius: int = pd.to_timedelta(36, unit="h").to_timedelta64().astype(int)
 
     # Circle area: A = πr**2
     # -> r = np.sqrt(A/np.pi)
@@ -135,12 +131,8 @@ def _compute_piechart_radii(week_band_dates : list[tuple[pd.Timestamp, pd.Timest
     return min_radius, max_radius
 
 
-def _collect_scatterplot_data(df : pd.DataFrame, min_radius : int, max_radius : int):
-    df_scatter = (
-        df.groupby(["timestamp", "pieGroupId"])[["yAxis", "nodeSize"]]
-        .sum()
-        .reset_index()
-    )
+def _collect_scatterplot_data(df: pd.DataFrame, min_radius: int, max_radius: int):
+    df_scatter = df.groupby(["timestamp", "pieGroupId"])[["yAxis", "nodeSize"]].sum().reset_index()
 
     df_scatter["nodeRadius"] = np.interp(
         df_scatter.nodeSize,
@@ -151,24 +143,18 @@ def _collect_scatterplot_data(df : pd.DataFrame, min_radius : int, max_radius : 
     return df_scatter
 
 
-def _compute_nonoverlapping_coordinates(df_scatter : pd.DataFrame):
+def _compute_nonoverlapping_coordinates(df_scatter: pd.DataFrame):
     df_scatter["x"] = df_scatter["timestamp"]
     df_scatter["y"] = df_scatter["yAxis"].astype(float)
     # The following DataFrame holds the number of circles that would be plotted on the same x-/y-coordinates if only
     # timestamp (x-coordinate) and yAxis (y-coordinate) are considered.
-    df_scatter_count = (
-        df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
-    )
+    df_scatter_count = df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
 
     return df_scatter
 
 
-def _collect_piechart_data(df : pd.DataFrame, df_scatter : pd.DataFrame):
-    df_pie_charts = (
-        df.groupby(["timestamp", "pieGroupId", "sliceGroupId"])[["yAxis", "nodeSize"]]
-        .sum()
-        .reset_index()
-    )
+def _collect_piechart_data(df: pd.DataFrame, df_scatter: pd.DataFrame):
+    df_pie_charts = df.groupby(["timestamp", "pieGroupId", "sliceGroupId"])[["yAxis", "nodeSize"]].sum().reset_index()
     df_pie_charts = pd.merge(
         df_pie_charts,
         df_scatter,
@@ -176,9 +162,7 @@ def _collect_piechart_data(df : pd.DataFrame, df_scatter : pd.DataFrame):
         on=["timestamp", "pieGroupId"],
         suffixes=("_share", ""),
     )
-    df_pie_charts["angle"] = (
-        df_pie_charts["nodeSize_share"] / df_pie_charts["nodeSize"] * (2 * np.pi)
-    )
+    df_pie_charts["angle"] = df_pie_charts["nodeSize_share"] / df_pie_charts["nodeSize"] * (2 * np.pi)
 
     starts = []
     ends = []
@@ -192,23 +176,17 @@ def _collect_piechart_data(df : pd.DataFrame, df_scatter : pd.DataFrame):
     return df_pie_charts
 
 
-def _collect_group_box_data(df_scatter : pd.DataFrame):
-    df_scatter_count = (
-        df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
-    )
+def _collect_group_box_data(df_scatter: pd.DataFrame):
+    df_scatter_count = df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
     df_boxes = df_scatter_count[df_scatter_count.amount > 1][["timestamp", "yAxis"]]
     return df_boxes
 
 
-def _compute_group_bounding_box(df_boxes : pd.DataFrame):
+def _compute_group_bounding_box(df_boxes: pd.DataFrame):
     # Set timestamp to the beginning of the week, i.e., Monday 00:00:00
     # `ts.weekday()` returns 0 for Monday, 1 for Tuesday, etc.
     # Consequently, subtracting that many days sets lower bound of bounding box to Monday.
-    df_boxes.timestamp = (
-        df_boxes.timestamp
-        - pd.to_timedelta(df_boxes.timestamp.dt.weekday, unit="d")
-        - pd.to_timedelta(12, unit="h")
-    )
+    df_boxes.timestamp = df_boxes.timestamp - pd.to_timedelta(df_boxes.timestamp.dt.weekday, unit="d") - pd.to_timedelta(12, unit="h")
     df_boxes.yAxis = df_boxes.yAxis - 0.5
     df_boxes["height"] = 1
     df_boxes["width"] = pd.to_timedelta(1, unit="w")
@@ -216,10 +194,10 @@ def _compute_group_bounding_box(df_boxes : pd.DataFrame):
 
 
 def create_plot(
-    week_band_dates : list[tuple[pd.Timestamp, pd.Timestamp]],
-    df_scatter : pd.DataFrame,
-    df_pie_charts : pd.DataFrame,
-    df_boxes : pd.DataFrame,
+    week_band_dates: list[tuple[pd.Timestamp, pd.Timestamp]],
+    df_scatter: pd.DataFrame,
+    df_pie_charts: pd.DataFrame,
+    df_boxes: pd.DataFrame,
     title="Default",
     nodeLabel="Node",
     yAxisLabel="Y",
@@ -253,7 +231,7 @@ def create_plot(
         factors=df_pie_charts.sliceGroupId.unique(),
     )
 
-    p : figure = figure(
+    p: figure = figure(
         sizing_mode="stretch_width",  # alternatively: "stretch_both",
         height=800,
         title=title,
@@ -278,7 +256,7 @@ def create_plot(
     p.renderers.extend(boxes)
 
     scatter_data_source = ColumnDataSource(data=df_scatter)
-    circles : GlyphRenderer[Circle] = p.circle(
+    circles: GlyphRenderer[Circle] = p.circle(
         x="x",
         y="y",
         radius="nodeRadius",
