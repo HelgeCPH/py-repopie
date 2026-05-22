@@ -25,14 +25,12 @@ import sys
 
 import numpy as np
 import pandas as pd
-from bokeh.io import output_file
 from bokeh.models import BoxAnnotation, ColumnDataSource, HoverTool
 from bokeh.plotting import figure, show
 from bokeh.transform import factor_cmap, factor_hatch
 from dateutil import rrule
-from iso_week_date.pandas_utils import datetime_to_isoweek, isoweek_to_datetime
-from packcircles import pack
 from docopt import docopt
+from iso_week_date.pandas_utils import datetime_to_isoweek, isoweek_to_datetime
 
 
 def read_data():
