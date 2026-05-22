@@ -31,6 +31,7 @@ from bokeh.transform import factor_cmap, factor_hatch
 from dateutil import rrule
 from docopt import docopt
 from iso_week_date.pandas_utils import datetime_to_isoweek, isoweek_to_datetime
+from packcircles import pack
 
 
 def main():
@@ -155,6 +156,36 @@ def _compute_nonoverlapping_coordinates(df_scatter: pd.DataFrame):
     # The following DataFrame holds the number of circles that would be plotted on the same x-/y-coordinates if only
     # timestamp (x-coordinate) and yAxis (y-coordinate) are considered.
     df_scatter_count = df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
+    for ts, y, _ in df_scatter_count[df_scatter_count.amount > 1].itertuples(index=False):
+        _compute_nonoverlapping_coordinates_per_box(df_scatter, ts, y)
+    return df_scatter
+
+
+def _compute_nonoverlapping_coordinates_per_box(df_scatter: pd.DataFrame, timestamp: pd.Timestamp, yAxis: int):
+    # Convert the radii to integers in seconds, since the packcircles implementation cannot handle very large integers
+    # in nanoseconds
+    row_indexer = (df_scatter.timestamp == timestamp) & (df_scatter.yAxis == yAxis)
+    radii_in_seconds = pd.to_timedelta(df_scatter[row_indexer].nodeRadius).astype(int) // 10**9
+    if df_scatter[row_indexer].nodeRadius.size < 3:
+        # the algorithm in the packcircles package needs at least three circles to pack them. In this case, to satisfy
+        # the algorithm, I add a tiny dummy circle, which will be removed later.
+        radii_in_seconds = pd.concat([radii_in_seconds, pd.Series(1)], ignore_index=True)
+
+    # Call the actual circle packing algorithm
+    circles = pack(radii_in_seconds.values)
+    if df_scatter[row_indexer].nodeRadius.size < 3:
+        # Remove the dummy circle again
+        circles = list(circles)[:-1]
+    packed_circle_coords_df = pd.DataFrame(circles, columns=["Δx", "Δy", "nodeRadius"])
+
+    # Convert the newly computed centers of packed circles back to time deltas and small values for y-coordinates so
+    # that they can be placed in the original coordinate system.
+    packed_circle_coords_df.Δx = pd.to_timedelta(packed_circle_coords_df.Δx, unit="s")
+    packed_circle_coords_df.Δy = (packed_circle_coords_df.Δy // 10**6) / 2
+
+    # Apply the newly computed coordinates to the scatter plot dataframe.
+    df_scatter.loc[row_indexer, "x"] = df_scatter.loc[row_indexer, "x"] + packed_circle_coords_df.Δx.values
+    df_scatter.loc[row_indexer, "y"] = df_scatter.loc[row_indexer, "y"] + packed_circle_coords_df.Δy.values
 
     return df_scatter
 
