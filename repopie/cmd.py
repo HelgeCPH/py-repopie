@@ -25,12 +25,42 @@ import sys
 
 import numpy as np
 import pandas as pd
-from bokeh.models import BoxAnnotation, ColumnDataSource, HoverTool
+from bokeh.models import BoxAnnotation, Circle, ColumnDataSource, GlyphRenderer, HoverTool
 from bokeh.plotting import figure, show
 from bokeh.transform import factor_cmap, factor_hatch
 from dateutil import rrule
 from docopt import docopt
 from iso_week_date.pandas_utils import datetime_to_isoweek, isoweek_to_datetime
+
+
+def main():
+    args = docopt(__doc__)
+    print(args)
+    p = create_repopie_plot(
+        title=args["--title"],
+        nodeLabel=args["--nodecategory"],
+        yAxisLabel=args["--y"],
+        rSizeLabel=args["--r"],
+    )
+    # TODO: Here, I want to save the bokeh plot so that I can embed it in a markdown file and so that its contents are
+    #  rendered on GitHub.
+    show(p)
+
+
+def create_repopie_plot(title="Default title", nodeLabel="Node", yAxisLabel="Y", rSizeLabel="Size"):
+    df = read_data()
+    week_band_dates, df_scatter, df_pie_charts, df_boxes = preprocess_data(df)
+    p = create_plot(
+        week_band_dates,
+        df_scatter,
+        df_pie_charts,
+        df_boxes,
+        title=title,
+        nodeLabel=nodeLabel,
+        yAxisLabel=yAxisLabel,
+        rSizeLabel=rSizeLabel,
+    )
+    return p
 
 
 def read_data():
@@ -39,6 +69,21 @@ def read_data():
         names=["timestamp", "yAxis", "nodeSize", "pieGroupId", "sliceGroupId"],
     )
     return df
+
+
+def preprocess_data(df : pd.DataFrame):
+    _compute_timestamp_fields(df)
+    week_band_dates = _compute_week_bands(df)
+
+    min_radius, max_radius = _compute_piechart_radii(week_band_dates)
+    df_scatter = _collect_scatterplot_data(df, min_radius, max_radius)
+    # In case multiple circles have to plotted on the same x-/y-coordinates:
+    df_scatter = _compute_nonoverlapping_coordinates(df_scatter)
+
+    df_pie_charts = _collect_piechart_data(df, df_scatter)
+    df_boxes = _compute_group_bounding_box(_collect_group_box_data(df_scatter))
+
+    return week_band_dates, df_scatter, df_pie_charts, df_boxes
 
 
 def _compute_timestamp_fields(df : pd.DataFrame):
@@ -106,6 +151,18 @@ def _collect_scatterplot_data(df : pd.DataFrame, min_radius : int, max_radius : 
     return df_scatter
 
 
+def _compute_nonoverlapping_coordinates(df_scatter : pd.DataFrame):
+    df_scatter["x"] = df_scatter["timestamp"]
+    df_scatter["y"] = df_scatter["yAxis"].astype(float)
+    # The following DataFrame holds the number of circles that would be plotted on the same x-/y-coordinates if only
+    # timestamp (x-coordinate) and yAxis (y-coordinate) are considered.
+    df_scatter_count = (
+        df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
+    )
+
+    return df_scatter
+
+
 def _collect_piechart_data(df : pd.DataFrame, df_scatter : pd.DataFrame):
     df_pie_charts = (
         df.groupby(["timestamp", "pieGroupId", "sliceGroupId"])[["yAxis", "nodeSize"]]
@@ -156,32 +213,6 @@ def _compute_group_bounding_box(df_boxes : pd.DataFrame):
     df_boxes["height"] = 1
     df_boxes["width"] = pd.to_timedelta(1, unit="w")
     return df_boxes
-
-def _compute_nonoverlapping_coordinates(df_scatter : pd.DataFrame):
-    df_scatter["x"] = df_scatter["timestamp"]
-    df_scatter["y"] = df_scatter["yAxis"].astype(float)
-    # The following DataFrame holds the number of circles that would be plotted on the same x-/y-coordinates if only
-    # timestamp (x-coordinate) and yAxis (y-coordinate) are considered.
-    df_scatter_count = (
-        df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
-    )
-
-    return df_scatter
-
-
-def preprocess_data(df : pd.DataFrame):
-    _compute_timestamp_fields(df)
-    week_band_dates = _compute_week_bands(df)
-
-    min_radius, max_radius = _compute_piechart_radii(week_band_dates)
-    df_scatter = _collect_scatterplot_data(df, min_radius, max_radius)
-    # In case multiple circles have to plotted on the same x-/y-coordinates:
-    df_scatter = _compute_nonoverlapping_coordinates(df_scatter)
-
-    df_pie_charts = _collect_piechart_data(df, df_scatter)
-    df_boxes = _compute_group_bounding_box(_collect_group_box_data(df_scatter))
-
-    return week_band_dates, df_scatter, df_pie_charts, df_boxes
 
 
 def create_plot(
@@ -247,7 +278,7 @@ def create_plot(
     p.renderers.extend(boxes)
 
     scatter_data_source = ColumnDataSource(data=df_scatter)
-    circles : p.GlyphRenderer[p.Circle] = p.circle(
+    circles : GlyphRenderer[Circle] = p.circle(
         x="x",
         y="y",
         radius="nodeRadius",
@@ -320,35 +351,3 @@ def create_plot(
     p.add_layout(p.legend[0], "right")
 
     return p
-
-
-def create_repopie_plot(
-    title="Default title", nodeLabel="Node", yAxisLabel="Y", rSizeLabel="Size"
-):
-    df = read_data()
-    week_band_dates, df_scatter, df_pie_charts, df_boxes = preprocess_data(df)
-    p = create_plot(
-        week_band_dates,
-        df_scatter,
-        df_pie_charts,
-        df_boxes,
-        title=title,
-        nodeLabel=nodeLabel,
-        yAxisLabel=yAxisLabel,
-        rSizeLabel=rSizeLabel,
-    )
-    return p
-
-
-def main():
-    args = docopt(__doc__)
-    print(args)
-    p = create_repopie_plot(
-        title=args["--title"],
-        nodeLabel=args["--nodecategory"],
-        yAxisLabel=args["--y"],
-        rSizeLabel=args["--r"],
-    )
-    # TODO: Here, I want to save the bokeh plot so that I can embed it in a markdown file and so that its contents are
-    #  rendered on GitHub.
-    show(p)
