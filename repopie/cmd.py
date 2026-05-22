@@ -64,6 +64,12 @@ def create_repopie_plot(title="Default title", nodeLabel="Node", yAxisLabel="Y",
 
 
 def read_data():
+    # Returns a DataFrame object, which will look something like:
+    #        timestamp      yAxis       nodeSize                 pieGroupId     sliceGroupId
+    #   0   2025-07-02          1            126        cmd/repopie/main.go      ropf@itu.dk
+    #   1   2025-07-02          1            122        main.go                  ropf@itu.dk
+    #   ...
+
     df = pd.read_csv(
         sys.stdin,
         names=["timestamp", "yAxis", "nodeSize", "pieGroupId", "sliceGroupId"],
