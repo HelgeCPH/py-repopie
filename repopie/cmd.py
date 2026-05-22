@@ -43,7 +43,7 @@ def read_data():
     return df
 
 
-def _compute_timestamp_fields(df):
+def _compute_timestamp_fields(df : pd.DataFrame):
     df.timestamp = pd.to_datetime(df.timestamp)
     df["timestamp_isoweek"] = datetime_to_isoweek(series=df.timestamp)
     df["timestamp_month"] = df.timestamp.dt.strftime("%Y-%m")
@@ -58,7 +58,7 @@ def _compute_timestamp_fields(df):
     return df
 
 
-def _compute_week_bands(df):
+def _compute_week_bands(df : pd.DataFrame):
     time_span = pd.Series(
         rrule.rrule(
             rrule.WEEKLY,
@@ -77,14 +77,14 @@ def _compute_week_bands(df):
     return week_band_dates
 
 
-def _compute_piechart_radii(week_band_dates):
+def _compute_piechart_radii(week_band_dates : list[tuple[pd.Timestamp, pd.Timestamp]]):
     week_start_dt, week_end_dt = week_band_dates[0]
-    week_start_dt_ns = week_start_dt.to_datetime64().astype(int)
-    week_end_dt_ns = week_end_dt.to_datetime64().astype(int)
+    week_start_dt_ns : int = week_start_dt.to_datetime64().astype(int)
+    week_end_dt_ns : int = week_end_dt.to_datetime64().astype(int)
     week_len_in_ns = week_end_dt_ns - week_start_dt_ns
     max_radius = week_len_in_ns // 2
 
-    min_radius = pd.to_timedelta(36, unit="h").to_timedelta64().astype(int)
+    min_radius : int = pd.to_timedelta(36, unit="h").to_timedelta64().astype(int)
 
     # Circle area: A = πr**2
     # -> r = np.sqrt(A/np.pi)
@@ -92,7 +92,7 @@ def _compute_piechart_radii(week_band_dates):
     return min_radius, max_radius
 
 
-def _collect_scatterplot_data(df, min_radius, max_radius):
+def _collect_scatterplot_data(df : pd.DataFrame, min_radius : int, max_radius : int):
     df_scatter = (
         df.groupby(["timestamp", "pieGroupId"])[["yAxis", "nodeSize"]]
         .sum()
@@ -108,7 +108,7 @@ def _collect_scatterplot_data(df, min_radius, max_radius):
     return df_scatter
 
 
-def _collect_piechart_data(df, df_scatter):
+def _collect_piechart_data(df : pd.DataFrame, df_scatter : pd.DataFrame):
     df_pie_charts = (
         df.groupby(["timestamp", "pieGroupId", "sliceGroupId"])[["yAxis", "nodeSize"]]
         .sum()
@@ -137,7 +137,7 @@ def _collect_piechart_data(df, df_scatter):
     return df_pie_charts
 
 
-def _collect_group_box_data(df_scatter):
+def _collect_group_box_data(df_scatter : pd.DataFrame):
     df_scatter_count = (
         df_scatter.groupby(["timestamp", "yAxis"]).size().reset_index(name="amount")
     )
@@ -145,7 +145,7 @@ def _collect_group_box_data(df_scatter):
     return df_boxes
 
 
-def _compute_group_bounding_box(df_boxes):
+def _compute_group_bounding_box(df_boxes : pd.DataFrame):
     # Set timestamp to the beginning of the week, i.e., Monday 00:00:00
     # `ts.weekday()` returns 0 for Monday, 1 for Tuesday, etc.
     # Consequently, subtracting that many days sets lower bound of bounding box to Monday.
@@ -159,7 +159,7 @@ def _compute_group_bounding_box(df_boxes):
     df_boxes["width"] = pd.to_timedelta(1, unit="w")
     return df_boxes
 
-def _compute_nonoverlapping_coordinates(df_scatter):
+def _compute_nonoverlapping_coordinates(df_scatter : pd.DataFrame):
     df_scatter["x"] = df_scatter["timestamp"]
     df_scatter["y"] = df_scatter["yAxis"].astype(float)
     # The following DataFrame holds the number of circles that would be plotted on the same x-/y-coordinates if only
@@ -171,7 +171,7 @@ def _compute_nonoverlapping_coordinates(df_scatter):
     return df_scatter
 
 
-def preprocess_data(df):
+def preprocess_data(df : pd.DataFrame):
     _compute_timestamp_fields(df)
     week_band_dates = _compute_week_bands(df)
 
@@ -187,10 +187,10 @@ def preprocess_data(df):
 
 
 def create_plot(
-    week_band_dates,
-    df_scatter,
-    df_pie_charts,
-    df_boxes,
+    week_band_dates : list[tuple[pd.Timestamp, pd.Timestamp]],
+    df_scatter : pd.DataFrame,
+    df_pie_charts : pd.DataFrame,
+    df_boxes : pd.DataFrame,
     title="Default",
     nodeLabel="Node",
     yAxisLabel="Y",
@@ -224,7 +224,7 @@ def create_plot(
         factors=df_pie_charts.sliceGroupId.unique(),
     )
 
-    p = figure(
+    p : figure = figure(
         sizing_mode="stretch_width",  # alternatively: "stretch_both",
         height=800,
         title=title,
@@ -249,7 +249,7 @@ def create_plot(
     p.renderers.extend(boxes)
 
     scatter_data_source = ColumnDataSource(data=df_scatter)
-    circles = p.circle(
+    circles : p.GlyphRenderer[p.Circle] = p.circle(
         x="x",
         y="y",
         radius="nodeRadius",
