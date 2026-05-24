@@ -31,7 +31,7 @@ from bokeh.transform import factor_cmap, factor_hatch
 from dateutil import rrule
 from docopt import docopt
 from iso_week_date.pandas_utils import datetime_to_isoweek, isoweek_to_datetime
-from packcircles import pack
+import circlify
 
 
 def main():
@@ -210,23 +210,35 @@ def _compute_nonoverlapping_coordinates_per_box(df_scatter: pd.DataFrame, timest
     # in nanoseconds
     row_indexer = (df_scatter.timestamp == timestamp) & (df_scatter.yAxis == yAxis)
     # Nodes radii in seconds, instead of nano seconds
-    radii_in_seconds = pd.to_timedelta(df_scatter[row_indexer].nodeRadius).astype(int) // 10**9
-    if df_scatter[row_indexer].nodeRadius.size < 3:
-        # the algorithm in the packcircles package needs at least three circles to pack them. In this case, to satisfy
-        # the algorithm, I add a tiny dummy circle, which will be removed later.
-        radii_in_seconds = pd.concat([radii_in_seconds, pd.Series(1)], ignore_index=True)
+    radii_in_seconds = (pd.to_timedelta(df_scatter[row_indexer].nodeRadius).astype(int) // 10**9) * 2
 
-    # Call the actual circle packing algorithm
-    circles = pack(radii_in_seconds.values)
-    if df_scatter[row_indexer].nodeRadius.size < 3:
-        # Remove the dummy circle again
-        circles = list(circles)[:-1]
-    packed_circle_coords_df = pd.DataFrame(circles, columns=["Δx", "Δy", "nodeRadius"])
+    circles = circlify.circlify(
+        radii_in_seconds.values.tolist(),
+        show_enclosure=False,
+    )
 
-    # Convert the newly computed centers of packed circles back to time deltas and small values for y-coordinates so
-    # that they can be placed in the original coordinate system.
+    packed_circle_coords_df = pd.DataFrame(
+        [(c.x, c.y) for c in circles],
+        columns=["Δx", "Δy"],
+    )
+
+    # circlify normalizes to a unit circle, so scale back up
+    # The largest input radius tells us what scale factor to use
+    scale = radii_in_seconds.max()
+    packed_circle_coords_df.Δx *= scale
+    packed_circle_coords_df.Δy *= scale
+
+    # Re-centre on bounding box midpoint
+    x_mid = (packed_circle_coords_df.Δx.max() + packed_circle_coords_df.Δx.min()) / 2
+    y_mid = (packed_circle_coords_df.Δy.max() + packed_circle_coords_df.Δy.min()) / 2
+    packed_circle_coords_df.Δx -= x_mid
+    packed_circle_coords_df.Δy -= y_mid
+
     packed_circle_coords_df.Δx = pd.to_timedelta(packed_circle_coords_df.Δx, unit="s")
-    packed_circle_coords_df.Δy = (packed_circle_coords_df.Δy // 10**6) / 2
+
+    week_width_seconds = 7 * 24 * 3600
+    packed_circle_coords_df.Δy = packed_circle_coords_df.Δy / week_width_seconds
+
 
     # Apply the newly computed coordinates to the scatter plot dataframe.
     df_scatter.loc[row_indexer, "x"] = df_scatter.loc[row_indexer, "x"] + packed_circle_coords_df.Δx.values
